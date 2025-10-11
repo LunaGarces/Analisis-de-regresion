@@ -1,6 +1,3 @@
-# Paquetes (instala los que falten solo una vez)
-# install.packages(c("readxl","dplyr","ggplot2","janitor","corrplot","lmtest","car","nortest"))
-
 library(readxl)
 library(dplyr)
 library(ggplot2)
@@ -132,15 +129,15 @@ test <- subset(datos_diarios , subset = partition == 'test')
 
 ## MOODELOS 
 # columnas candidatas: todas menos la respuesta y solo numéricas
-cols <- setdiff(names(data), c("bikers", "casual", "registered"))
-cols <- cols[sapply(data[cols], is.numeric)]
+cols <- setdiff(names(train), c("bikers", "casual", "registered"))
+cols <- cols[sapply(train[cols], is.numeric)]
 
 col_max <- NA_character_
 r2_max  <- -Inf
 
 for (nm in cols) {
   # filtra filas completas para esa X y la respuesta
-  df_sub <- data[, c("bikers", nm)]
+  df_sub <- train[, c("bikers", nm)]
   df_sub <- stats::na.omit(df_sub)
   
   # salta si quedó sin datos suficientes
@@ -163,7 +160,7 @@ r2_max
 
 
 # Empezar con la mejor variable individual
-current_vars <- c("temp_range")
+current_vars <- c(col_max)
 best_adj_r2 <- summary(lm(reformulate(current_vars, "bikers"), data = train))$adj.r.squared
 improved <- TRUE
 
@@ -220,9 +217,41 @@ cat("=== MODELO FINAL ===\n")
 cat("Variables seleccionadas:", paste(current_vars, collapse = ", "), "\n")
 cat("R² ajustado final:", round(best_adj_r2, 5), "\n")
 
-# Modelo final
 modelo_final <- lm(reformulate(current_vars, "bikers"), data = train)
+vif(modelo_final)
 summary(modelo_final)
+
+
+#Modelo sin tanta colinealidad (MODIFICRA SI modelo_final CAMBIA)
+modelo_simplificado <- lm(
+  bikers ~ atemp_avg + hum_min + windspeed + weathersit + mnth + holiday,
+  data = train
+)
+
+summary(modelo_simplificado)
+vif(modelo_simplificado)
+
+test$pred <- predict(modelo_simplificado, newdata = test)
+
+R2_test <- 1 - sum((test$bikers - test$pred)^2) / sum((test$bikers - mean(test$bikers))^2)
+cat("R² en test:", round(R2_test, 3), "\n")
+
+
+ggplot(test, aes(x = bikers, y = pred)) +
+  geom_point(color = "#0fc48b", alpha = 0.6, size = 2) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed", linewidth = 0.8) +
+  labs(
+    title = "Predicción vs Observación (Datos de Test)",
+    subtitle = paste0("R² en test = ", round(R2_test, 3)),
+    x = "Número de ciclistas observados",
+    y = "Número de ciclistas predichos"
+  ) +
+  theme_minimal(base_size = 12)
+
+
+# Falta agregar lo de MSE, MAE y MAPE
+
+
 
 
 
