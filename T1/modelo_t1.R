@@ -1,6 +1,3 @@
-# --- Configuración ---
-setwd("/Users/luna_garcesr/Library/Mobile Documents/com~apple~CloudDocs/Documents/8vo Semestre/Analisis de Regresion/Tareas/T1")
-
 # Paquetes (instala los que falten solo una vez)
 # install.packages(c("readxl","dplyr","ggplot2","janitor","corrplot","lmtest","car","nortest"))
 
@@ -15,7 +12,7 @@ library(nortest)
 library(lubridate)
 
 # --- Importar datos ---
-datos <- read_excel("Tarea_1_2025_02.xlsx") |> clean_names()
+datos <- rio::import(file.choose())
 
 
 ## SEPARACIÓN DE DATOS Y TRABAJO DE DATOS 
@@ -34,20 +31,18 @@ datos$weathersit <- factor(
   ordered = TRUE
 )
 
-# --- Agregación de datos por día ---
+# --- Agrupar de datos por día ---
 
 get_mode <- function(x) {
   ux <- unique(x)
   ux[which.max(tabulate(match(x, ux)))]
 }
 
+
+# DESPUÉS (correcto):
 datos <- datos %>%
   mutate(
-    date = make_date(
-      year = 2011,
-      month = mnth,
-      day = day
-    )
+    date = as.Date(day - 1, origin = "2011-01-01")
   )
 
 # Agrupar por día 
@@ -62,7 +57,7 @@ datos_diarios <- datos %>%
     # --- bools ---
     holiday     = as.integer(any(holiday == 1, na.rm = TRUE)),
     workingday  = as.integer(any(workingday == 1, na.rm = TRUE)),
- 
+    
     # Humedad 
     hum_avg     = mean(hum, na.rm = TRUE),
     hum_min     = min(hum, na.rm = TRUE),
@@ -71,7 +66,7 @@ datos_diarios <- datos %>%
     
     # --- promedios diario ---
     # Temperaturas
-  
+    
     temp_avg    = mean(temp, na.rm = TRUE),
     temp_max    = max(temp, na.rm = TRUE),
     temp_min    = min(temp, na.rm = TRUE),
@@ -107,12 +102,19 @@ datos_diarios <- datos %>%
 glimpse(datos_diarios)
 
 
+
+sum(is.na(datos_diarios$date))
+datos_diarios <- datos_diarios %>% filter(!is.na(date))
+
+dim(datos_diarios)
+dim(datos)
+
+
 # Partición de entrenamiento y prueba:
 
 datos_diarios$partition <- NA  # <- Creamos una nueva columna con NA's
 
 # data de entrenamiento y de prueba:
-
 n <- nrow(datos_diarios)
 s <- sample(c(1:n),round(n*0.8,digits=0),replace=FALSE)
 datos_diarios$partition[s] <- 'train'  # <- Rellenamos el 80% con entrenamiento
@@ -126,7 +128,6 @@ for(i in 1:n){
 #guardamos
 train <- subset(datos_diarios , subset = partition == 'train')
 test <- subset(datos_diarios , subset = partition == 'test')
-
 
 
 ## MOODELOS 
@@ -222,5 +223,6 @@ cat("R² ajustado final:", round(best_adj_r2, 5), "\n")
 # Modelo final
 modelo_final <- lm(reformulate(current_vars, "bikers"), data = train)
 summary(modelo_final)
+
 
 
