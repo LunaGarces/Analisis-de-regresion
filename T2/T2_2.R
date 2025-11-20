@@ -36,6 +36,7 @@ feriados_completa <- as.Date(c(
   "2018-01-01", "2018-03-30", "2018-05-01", "2018-05-21", "2018-07-02", "2018-07-16", "2018-08-15", "2018-09-17", "2018-09-18", "2018-09-19", "2018-10-15", "2018-11-01", "2018-11-02", "2018-12-08", "2018-12-25",
   "2019-01-01", "2019-04-19", "2019-05-01", "2019-05-21", "2019-06-29", "2019-07-16", "2019-08-15", "2019-09-18", "2019-09-19", "2019-09-20", "2019-10-12", "2019-10-31", "2019-11-01", "2019-12-08", "2019-12-25"
 ))
+
 df_final <- df_final %>%
   mutate(es_feriado = ifelse(date %in% feriados_completa, 1, 0))
 table(df_final$es_feriado) 
@@ -233,6 +234,7 @@ bp_test_base$p.value
 bp_test_Ytrans <- bptest(modelo_Ytrans)
 print(bp_test_Ytrans) 
 bp_test_Ytrans$p.value
+
 ############################
 ### comparacion de modelos #
 ############################
@@ -258,7 +260,17 @@ print(paste("RSS Inicial", round(RSS_mod_inicial, 2)))
 print(paste("RSS Base:", round(RSS_mod_base, 2)))
 print(paste("RSS Ytrans:", round(RSS_Ytrans, 2)))
 
+#shapiro 
+  #Hipótesis nula (H₀): Los residuos siguen una distribución normal
+  #Hipótesis alternativa (H₁): Los residuos NO siguen una distribución normal
+  #Criterio de decisión: Si p-value < 0.05, se rechaza H₀ (no hay normalidad)
 
+shapiro_resid_inicial <- shapiro.test(modelo_inicial$residuals)
+shapiro_resid_inicial
+shapiro_resid_base <- shapiro.test(mod_base$residuals)
+shapiro_resid_base
+shapiro_resid_Ytrans <- shapiro.test(modelo_Ytrans$residuals)
+shapiro_resid_Ytrans
 ############################
 ### Selección de modelos ###
 ############################
@@ -309,10 +321,61 @@ bp_test <- bptest(modelo_elegido)
 print(bp_test)
 bp_test$p.value 
 
-cat("\n--- COEFICIENTES ROBUSTOS (HC3) ---\n")
-# Esto ajusta los "Std. Error" y los "p-values"
+# HC3 errores robustos
+
 modelo_robusto <- coeftest(modelo_elegido, vcov = vcovHC(modelo_elegido, type = "HC3"))
 print(modelo_robusto)
+library(ggplot2)
+
+coef_data <- data.frame(
+  variable = rownames(modelo_robusto),
+  estimate = modelo_robusto[,1],
+  std_error = modelo_robusto[,2],
+  p_value = modelo_robusto[,4]
+)
+# IC 
+coef_data$conf_low <- coef_data$estimate - 1.96 * coef_data$std_error
+coef_data$conf_high <- coef_data$estimate + 1.96 * coef_data$std_error
+coef_plot <- coef_data[coef_data$variable != "(Intercept)", ]
+
+ggplot(coef_plot, aes(x = estimate, y = reorder(variable, estimate))) +
+  geom_point(size = 2, color = "blue") +
+  geom_errorbarh(aes(xmin = conf_low, xmax = conf_high), 
+                 height = 0.2, color = "gray50") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "red", alpha = 0.7) +
+  labs(title = "Coeficientes robustos (HC3) con intervalos de confianza 95%",
+       subtitle = "Variables ordenadas por magnitud del efecto",
+       x = "Estimación del coeficiente", 
+       y = "Variables",
+       caption = "Línea roja: efecto nulo. Intervalos que no cruzan cero son significativos") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(size = 8))
+
+ggplot(coef_plot, aes(x = estimate, y = -log10(p_value), 
+                      color = p_value < 0.05, label = variable)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "red") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray") +
+  geom_text(check_overlap = TRUE, nudge_y = 0.1, size = 3) +
+  scale_color_manual(values = c("FALSE" = "gray", "TRUE" = "blue"),
+                     name = "Significativo (p < 0.05)") +
+  labs(title = "Volcán de significancia - Coeficientes robustos",
+       x = "Magnitud del efecto", 
+       y = "Significancia (-log10 p-value)") +
+  theme_minimal()
+
+
+meses_data <- coef_plot[grep("month", coef_plot$variable), ]
+  
+ggplot(meses_data, aes(x = reorder(variable, estimate), y = estimate)) +
+  geom_col(aes(fill = p_value < 0.05), alpha = 0.8) +
+  geom_errorbar(aes(ymin = conf_low, ymax = conf_high), width = 0.2) +
+  scale_fill_manual(values = c("TRUE" = "steelblue", "FALSE" = "gray"),
+                      name = "Significativo") +
+  labs(title = "Efecto de meses vs mes de referencia",
+        x = "Mes", y = "Diferencia vs referencia") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 
 ################
@@ -321,22 +384,22 @@ print(modelo_robusto)
 
 ### Aplicar las mismas transformaciones Box-Cox a test_data ###
 
-### Temperaturas ### (usando los mismos lambdas del train)
+### Temperaturas
 test_data$temp_avg_bc <- BoxCox(test_data$temp_avg, bc_temp_avg)
 test_data$temp_min_bc <- BoxCox(test_data$temp_min, bc_temp_min)
 test_data$temp_max_bc <- BoxCox(test_data$temp_max, bc_temp_max)
 
-### Humedad ###
+### Humedad 
 test_data$humidity_avg_bc <- BoxCox(test_data$humidity_avg, bc_humi_avg)
 test_data$humidity_min_bc <- BoxCox(test_data$humidity_min, bc_humi_min)
 test_data$humidity_max_bc <- BoxCox(test_data$humidity_max, bc_humi_max)
 
-### Nubosidad ### (misma constante +0.01)
+### Nubosidad 
 test_data$cloudcov_avg_bc <- BoxCox(test_data$cloudcov_avg + 0.01, bc_cloud_avg)
 test_data$cloudcov_min_bc <- BoxCox(test_data$cloudcov_min + 0.01, bc_cloud_min)
 test_data$cloudcov_max_bc <- BoxCox(test_data$cloudcov_max + 0.01, bc_cloud_max)
 
-### Visibilidad ### (usar misma imputación de NAs)
+### Visibilidad 
 visib_fix_test <- test_data %>% 
   dplyr::select(visibility_avg, visibility_min, visibility_max) %>%
   dplyr::mutate(across(everything(), ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)))
@@ -345,7 +408,7 @@ test_data$visibility_avg_bc <- BoxCox(visib_fix_test$visibility_avg, bc_visib_av
 test_data$visibility_min_bc <- BoxCox(visib_fix_test$visibility_min, bc_visib_min)
 test_data$visibility_max_bc <- BoxCox(visib_fix_test$visibility_max, bc_visib_max)
 
-### Lluvia ###
+### Lluvia 
 test_data$lluvia_bc <- BoxCox(test_data$lluvia + 1, bc_lluvia)
 
 # PCA temperatura
@@ -420,7 +483,7 @@ ggplot(df_plot, aes(x = Fecha)) +
   scale_color_manual(values = c("Real" = "black", "Predicho" = "red")) +
   theme_minimal() + 
   theme(
-    legend.position = "bottom",      # Leyenda abajo para no tapar el gráfico
+    legend.position = "bottom",     
     plot.title = element_text(face = "bold", size = 14),
     plot.subtitle = element_text(color = "gray40")
   )
