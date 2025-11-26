@@ -1,3 +1,12 @@
+###################################################
+###                                             ###
+###                                             ###
+###                   Tarea 2                   ###
+###                                             ###
+###                                             ###
+###################################################
+
+# Librerias   
 library(dplyr)
 library(corrplot)
 library(MASS) 
@@ -9,21 +18,26 @@ library(ggplot2)
 library(readxl)
 library(car)
 
+#############################
+###     Cargar Datos      ###
+#############################
+
 data <- read_excel("Tarea_2_2025_02.xlsx")
-data$date <- as.Date(data$date, format="%Y-%m-%d")
-head(data)
+data$date <- as.Date(data$date, format = "%Y-%m-%d")
 
 data_2019 <- read_excel("Tarea_2_2025_02.xlsx", sheet = 2)
-data_2019$date <- as.Date(data_2019$date, format="%Y-%m-%d")
-head(data_2019)
+data_2019$date <- as.Date(data_2019$date, format = "%Y-%m-%d")
 
 # Variable a predecir sera "comercial"
 set.seed(123)
 
-#sacar granel e industrial 
 df_final <- data %>%
-  dplyr::select(-granel, -industrial)
-colnames(df_final)[colnames(df_final) == "comercial"] <- "Y"
+  dplyr::select(-granel, -industrial) %>%   
+  dplyr::rename(Y = comercial)              
+
+data_2019 <- data_2019 %>%
+  dplyr::select(-granel, -industrial) %>%
+  dplyr::rename(Y = comercial)
 
 
 # Lista completa de feriados (Fijos y Móviles aproximados para Chile 2013-2019)
@@ -38,21 +52,40 @@ feriados_completa <- as.Date(c(
 ))
 
 df_final <- df_final %>%
-  mutate(es_feriado = ifelse(date %in% feriados_completa, 1, 0))
-table(df_final$es_feriado) 
-df_final$dia_semana <- wday(df_final$date, label = TRUE, abbr = FALSE)
+  mutate(
+    es_feriado = as.integer(date %in% feriados_completa),
+    dia_semana = as.factor(wday(date, label = TRUE, abbr = FALSE))
+  )
 
 data_2019 <- data_2019 %>%
-  dplyr::select(-granel, -industrial)
-colnames(data_2019)[colnames(data_2019) == "comercial"] <- "Y"
+  mutate(
+    es_feriado = as.integer(date %in% feriados_completa),
+    dia_semana = as.factor(wday(date, label = TRUE, abbr = FALSE))
+  )
+
+cols_clima_2019 <- c(
+  "temp_avg", "temp_min", "temp_max",
+  "humidity_avg", "humidity_min", "humidity_max",
+  "cloudcov_avg", "cloudcov_min", "cloudcov_max",
+  "visibility_avg", "visibility_min", "visibility_max",
+  "lluvia"
+)
+
 data_2019 <- data_2019 %>%
-  mutate(es_feriado = ifelse(date %in% feriados_completa, 1, 0))
-data_2019$dia_semana <- wday(data_2019$date, label = TRUE, abbr = FALSE)
+  dplyr::mutate(
+    dplyr::across(
+      dplyr::all_of(cols_clima_2019),
+      ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)
+    )
+  )
+
 
 # div train test 80% y 20%
 train_indices <- sample(1:nrow(df_final), size = 0.8 * nrow(df_final))
 train_data <- df_final[train_indices, ]
 test_data <- df_final[-train_indices, ]
+
+
 
 #############################
 ### Analisis exploratorio ###
@@ -106,6 +139,28 @@ corrplot::corrplot(matriz_cor, type = "full", method = "color",
 
 modelo_inicial <- lm(Y ~ temp_avg + lluvia + humidity_avg + cloudcov_avg + visibility_avg + es_feriado + factor(month) + factor(dia_semana), 
                      data = train_data)
+
+summary(train_data$Y)
+sd(train_data$Y, na.rm = TRUE)
+
+train_data %>%
+  group_by(month) %>%
+  summarise(
+    media_Y = mean(Y, na.rm = TRUE),
+    sd_Y    = sd(Y, na.rm = TRUE)
+  )
+
+train_data %>%
+  group_by(dia_semana) %>%
+  summarise(
+    media_Y = mean(Y, na.rm = TRUE),
+    sd_Y    = sd(Y, na.rm = TRUE)
+  )
+
+cor_ordenada
+
+
+
 ############################################
 ### Transformación Box–Cox de regresores ###
 ############################################
@@ -187,14 +242,18 @@ train_data$visibility_pca <- as.numeric(pca_visib$x[, 1])
 
 ### Eliminamos únicamente las variables originales redundantes ###
 train_data <- train_data %>% 
-  dplyr::select(-temp_avg, -temp_min, -temp_max,
-         -humidity_avg, -humidity_min, -humidity_max,
-         -cloudcov_avg, -cloudcov_min, -cloudcov_max,
-         -visibility_avg, -visibility_min, -visibility_max,
-         -temp_avg_bc, -temp_min_bc, -temp_max_bc,
-         -humidity_avg_bc, -humidity_min_bc, -humidity_max_bc,
-         -cloudcov_avg_bc, -cloudcov_min_bc, -cloudcov_max_bc,
-         -visibility_avg_bc, -visibility_min_bc, -visibility_max_bc)
+  dplyr::select(
+    -lluvia,                           
+    -temp_avg, -temp_min, -temp_max,
+    -temp_avg_bc, -temp_min_bc, -temp_max_bc,  # ahora también borras temp_avg_bc
+    -humidity_avg, -humidity_min, -humidity_max,
+    -cloudcov_avg, -cloudcov_min, -cloudcov_max,
+    -visibility_avg, -visibility_min, -visibility_max,
+    -humidity_avg_bc, -humidity_min_bc, -humidity_max_bc,
+    -cloudcov_avg_bc, -cloudcov_min_bc, -cloudcov_max_bc,
+    -visibility_avg_bc, -visibility_min_bc, -visibility_max_bc
+  )
+
 
 ###################################
 ### Transformación Box–Cox de Y ###
@@ -223,7 +282,7 @@ hist(train_data$Y_trans, main="Transformada Box-Cox (Más Normal)", col="green",
 
 qqPlot(mod_base$residuals, 
        main="QQ-Plot de los residuos (Datos Originales)")
-qqPlot(modelo_final$residuals, 
+qqPlot(modelo_Ytrans$residuals, 
        main="QQ-Plot de los residuos (Datos Transformados)") 
 par(mfrow=c(1,1))
 
@@ -235,9 +294,12 @@ bp_test_Ytrans <- bptest(modelo_Ytrans)
 print(bp_test_Ytrans) 
 bp_test_Ytrans$p.value
 
+
+
 ############################
 ### comparacion de modelos #
 ############################
+
 par(mfrow = c(2, 2))
 summary(modelo_inicial)
 plot(modelo_inicial, main = "Diagnósticos Modelo Inicial")
@@ -271,6 +333,12 @@ shapiro_resid_base <- shapiro.test(mod_base$residuals)
 shapiro_resid_base
 shapiro_resid_Ytrans <- shapiro.test(modelo_Ytrans$residuals)
 shapiro_resid_Ytrans
+
+AIC(modelo_inicial); BIC(modelo_inicial)
+AIC(mod_base);       BIC(mod_base)
+AIC(modelo_Ytrans);  BIC(modelo_Ytrans)
+
+
 ############################
 ### Selección de modelos ###
 ############################
@@ -321,11 +389,13 @@ bp_test <- bptest(modelo_elegido)
 print(bp_test)
 bp_test$p.value 
 
-# HC3 errores robustos
 
+
+############################
+###         HC3          ###
+############################
 modelo_robusto <- coeftest(modelo_elegido, vcov = vcovHC(modelo_elegido, type = "HC3"))
 print(modelo_robusto)
-library(ggplot2)
 
 coef_data <- data.frame(
   variable = rownames(modelo_robusto),
@@ -376,6 +446,7 @@ ggplot(meses_data, aes(x = reorder(variable, estimate), y = estimate)) +
         x = "Mes", y = "Diferencia vs referencia") +
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
 
 
 ################
@@ -490,4 +561,126 @@ ggplot(df_plot, aes(x = Fecha)) +
 
 
 
+###############################
+###  VALIDACIÓN AÑO 2019   ###
+###############################
+
+## Temperaturas
+data_2019$temp_avg_bc <- BoxCox(data_2019$temp_avg, bc_temp_avg)
+data_2019$temp_min_bc <- BoxCox(data_2019$temp_min, bc_temp_min)
+data_2019$temp_max_bc <- BoxCox(data_2019$temp_max, bc_temp_max)
+
+## Humedad
+data_2019$humidity_avg_bc <- BoxCox(data_2019$humidity_avg, bc_humi_avg)
+data_2019$humidity_min_bc <- BoxCox(data_2019$humidity_min, bc_humi_min)
+data_2019$humidity_max_bc <- BoxCox(data_2019$humidity_max, bc_humi_max)
+
+## Nubosidad
+data_2019$cloudcov_avg_bc <- BoxCox(data_2019$cloudcov_avg + 0.01, bc_cloud_avg)
+data_2019$cloudcov_min_bc <- BoxCox(data_2019$cloudcov_min + 0.01, bc_cloud_min)
+data_2019$cloudcov_max_bc <- BoxCox(data_2019$cloudcov_max + 0.01, bc_cloud_max)
+
+## Visibilidad
+visib_fix_2019 <- data_2019 %>% 
+  dplyr::select(visibility_avg, visibility_min, visibility_max) %>%
+  dplyr::mutate(across(everything(), ~ ifelse(is.na(.), mean(., na.rm = TRUE), .)))
+
+data_2019$visibility_avg_bc <- BoxCox(visib_fix_2019$visibility_avg, bc_visib_avg)
+data_2019$visibility_min_bc <- BoxCox(visib_fix_2019$visibility_min, bc_visib_min)
+data_2019$visibility_max_bc <- BoxCox(visib_fix_2019$visibility_max, bc_visib_max)
+
+## Lluvia
+data_2019$lluvia_bc <- BoxCox(data_2019$lluvia + 1, bc_lluvia)
+
+## PCA
+temps_bc_2019 <- data_2019 %>% dplyr::select(temp_avg_bc, temp_min_bc, temp_max_bc)
+humi_bc_2019  <- data_2019 %>% dplyr::select(humidity_avg_bc, humidity_min_bc, humidity_max_bc)
+cloud_bc_2019 <- data_2019 %>% dplyr::select(cloudcov_avg_bc, cloudcov_min_bc, cloudcov_max_bc)
+visib_bc_2019 <- data_2019 %>% dplyr::select(visibility_avg_bc, visibility_min_bc, visibility_max_bc)
+
+data_2019$temp_pca      <- predict(pca_temp,  newdata = temps_bc_2019)[, 1]
+data_2019$humidity_pca  <- predict(pca_humi,  newdata = humi_bc_2019)[, 1]
+data_2019$cloudcov_pca  <- predict(pca_cloud, newdata = cloud_bc_2019)[, 1]
+data_2019$visibility_pca<- predict(pca_visib, newdata = visib_bc_2019)[, 1]
+
+## Eliminar redundantes
+data_2019 <- data_2019 %>% 
+  dplyr::select(-temp_avg, -temp_min, -temp_max,
+                -humidity_avg, -humidity_min, -humidity_max,
+                -cloudcov_avg, -cloudcov_min, -cloudcov_max,
+                -visibility_avg, -visibility_min, -visibility_max,
+                -temp_avg_bc, -temp_min_bc, -temp_max_bc,
+                -humidity_avg_bc, -humidity_min_bc, -humidity_max_bc,
+                -cloudcov_avg_bc, -cloudcov_min_bc, -cloudcov_max_bc,
+                -visibility_avg_bc, -visibility_min_bc, -visibility_max_bc)
+
+## Y transformada
+data_2019$Y_adj   <- data_2019$Y + 1
+data_2019$Y_trans <- forecast::BoxCox(data_2019$Y_adj, lambda = lambda_elegido)
+
+## Factores alineados con train
+data_2019$dia_semana <- factor(data_2019$dia_semana,
+                               levels = levels(train_data$dia_semana))
+data_2019$month <- factor(data_2019$month,
+                          levels = levels(factor(train_data$month)))
+
+## Predicciones
+pred_2019_trans <- predict(modelo_elegido, newdata = data_2019)
+pred_2019 <- InvBoxCox(pred_2019_trans, lambda = lambda_elegido) - 1
+pred_2019[pred_2019 < 0] <- 0
+
+actual_2019 <- data_2019$Y
+
+#
+idx_validos_2019 <- which(!is.na(pred_2019) & !is.na(actual_2019))
+
+actual_2019_clean <- actual_2019[idx_validos_2019]
+pred_2019_clean   <- pred_2019[idx_validos_2019]
+
+# RMSE
+rmse_2019 <- sqrt(mean((actual_2019_clean - pred_2019_clean)^2, na.rm = TRUE))
+
+# MAPE 
+if (any(actual_2019_clean > 0, na.rm = TRUE)) {
+  idx_pos <- which(actual_2019_clean > 0 & !is.na(actual_2019_clean))
+  mape_2019 <- mean(
+    abs((actual_2019_clean[idx_pos] - pred_2019_clean[idx_pos]) /
+          actual_2019_clean[idx_pos]),
+    na.rm = TRUE
+  ) * 100
+} else {
+  mape_2019 <- NA_real_
+}
+
+cat("Desempeño en 2019 ")
+cat("MAPE 2019:", ifelse(is.na(mape_2019),
+                         "no definido (Y≈0)", round(mape_2019, 2)), "%\n")
+cat("RMSE 2019:", round(rmse_2019, 2), "kg\n")
+
+## Gráfico
+df_2019_plot <- data.frame(
+  Fecha    = data_2019$date[idx_validos_2019],
+  Real     = actual_2019_clean,
+  Predicho = pred_2019_clean
+)
+
+ggplot(df_2019_plot, aes(x = Fecha)) +
+  geom_line(aes(y = Real,     color = "Real"),     size = 0.8, alpha = 0.7) +
+  geom_line(aes(y = Predicho, color = "Predicho"), size = 0.8, alpha = 0.7) +
+  labs(
+    title = "Predicción Demanda Comercial - Año 2019 (fuera de muestra)",
+    subtitle = paste(
+      "MAPE:",
+      ifelse(is.na(mape_2019), "no definido", paste0(round(mape_2019, 2), "%")),
+      "- RMSE:", round(rmse_2019, 0), "kg"
+    ),
+    y = "Demanda (kg)", x = "Fecha"
+  ) +
+  scale_color_manual(values = c("Real" = "black", "Predicho" = "red")) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "gray40")
+  )
 
