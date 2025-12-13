@@ -3,10 +3,10 @@
 #  (PCA + LAG + BOX-COX + COMPARACIÓN DE MODELOS)
 # ==============================================================================
 
-"""
-EXTRA:
-ver tema con los datos faltantes, no debemos omitir estos datos?
-"""
+#"""
+#EXTRA:
+#ver tema con los datos faltantes, no debemos omitir estos datos?
+#"""
 # 1. Librerías
 library(lmtest)
 library(tseries)
@@ -106,6 +106,24 @@ print("--- Test Ljung-Box (P-value > 0.05 indica independencia) ---")
 print(lb_test)
 
 
+acf_valores <- acf(residuals(modelo_base_final), plot = FALSE)
+par(mar = c(5, 5, 4, 2))
+# 3. Generar el Gráfico (Correlograma)
+plot(acf_valores, 
+     main = "Autocorrelación de los Residuos (ACF)", 
+     col = "#2E86C1",       
+     lwd = 3,               
+     ci.col = "#FF0000",    
+     ci.type = "white",    
+     xlab = "Lag (Retardo Temporal)", 
+     ylab = "Autocorrelación",
+     las = 1,               
+     cex.main = 1.2,        
+     font.main = 2)       
+abline(h = 0, col = "black", lwd = 1)
+box(bty = "l")
+
+
 # ------------------------------------------------------------------------------
 # 5. TRANSFORMACIÓN BOX-COX
 # ------------------------------------------------------------------------------
@@ -173,22 +191,56 @@ summary(modelo_bc_final)
 # ------------------------------------------------------------------------------
 # 7. COMPARACIÓN FINAL (GRÁFICOS)
 # ------------------------------------------------------------------------------
+par(mfrow = c(4, 2), oma = c(2, 0, 4, 0), mar = c(3, 4, 2, 1))
+# Colores
+col_puntos <- "#1F4E79"  # Azul
+col_linea  <- "#FF0000"  # Rojo suave
+t_base <- "Modelo BASE"
+t_bc   <- "Modelo BOX-COX"
 
-# A) Comparación de Residuos (QQ-Plots)
-# Esto muestra qué tan bien se ajustan los errores a una distribución normal
-par(mfrow = c(1, 2))
-qqnorm(residuals(modelo_base_final), main="Modelo 1 (Base)\nSin Transformar", pch=20, col="gray")
-qqline(residuals(modelo_base_final), col="red", lwd=2)
+# =======================================================
+# FILA 1: Residuos vs Ajustados (Linealidad)
+# =======================================================
+# Gráfico Izquierda (Base)
+plot(modelo_base_final, which = 1, col = col_puntos, col.smooth = col_linea, 
+     pch = 16, cex = 0.6, sub.caption = NA, caption = "", main = "Residuos vs Ajustados")
+mtext(t_base, side = 3, line = 2, font = 2, cex = 0.9, col = "#1F4E79") # Etiqueta Columna
 
-qqnorm(residuals(modelo_bc_final), main="Modelo 2 (Optimizado)\nCon Box-Cox", pch=20, col="blue")
-qqline(residuals(modelo_bc_final), col="red", lwd=2)
-par(mfrow = c(1, 1))
+# Gráfico Derecha (Box-Cox)
+plot(modelo_bc_final, which = 1, col = col_puntos, col.smooth = col_linea, 
+     pch = 16, cex = 0.6, sub.caption = NA, caption = "", main = "Residuos vs Ajustados")
+mtext(t_bc, side = 3, line = 2, font = 2, cex = 0.9, col = "#1F4E79") # Etiqueta Columna
 
-# B) Diagnósticos Completos
-par(mfrow = c(2, 2), oma = c(0, 0, 2, 0))
-plot(modelo_bc_final)
-mtext("Diagnóstico Completo: Modelo Final Box-Cox", outer = TRUE, cex = 1.2, font = 2)
-par(mfrow = c(1, 1))
+# =======================================================
+# FILA 2: Normal Q-Q (Normalidad)
+# =======================================================
+plot(modelo_base_final, which = 2, col = col_puntos, col.qqline = col_linea, 
+     pch = 16, cex = 0.6, sub.caption = NA, caption = "", main = "Normal Q-Q")
+
+plot(modelo_bc_final, which = 2, col = col_puntos, col.qqline = col_linea, 
+     pch = 16, cex = 0.6, sub.caption = NA, caption = "", main = "Normal Q-Q")
+
+# =======================================================
+# FILA 3: Escala-Ubicación (Homocedasticidad)
+# =======================================================
+plot(modelo_base_final, which = 3, col = col_puntos, col.smooth = col_linea, 
+     pch = 16, cex = 0.6, sub.caption = NA, caption = "", main = "Escala-Ubicación")
+
+plot(modelo_bc_final, which = 3, col = col_puntos, col.smooth = col_linea, 
+     pch = 16, cex = 0.6, sub.caption = NA, caption = "", main = "Escala-Ubicación")
+
+# =======================================================
+# FILA 4: Residuos vs Apalancamiento (Outliers)
+# =======================================================
+plot(modelo_base_final, which = 5, col = col_puntos, col.smooth = col_linea, 
+     pch = 16, cex = 0.6, sub.caption = NA, caption = "", main = "Residuos vs Apalancamiento")
+
+plot(modelo_bc_final, which = 5, col = col_puntos, col.smooth = col_linea, 
+     pch = 16, cex = 0.6, sub.caption = NA, caption = "", main = "Residuos vs Apalancamiento")
+
+
+# Restaurar configuración
+par(mfrow = c(1, 1), oma = c(0, 0, 0, 0))
 
 # ------------------------------------------------------------------------------
 # 8. PREPARAR VAL Y TEST PARA PREDECIR (PCA + BOX-COX)
@@ -414,4 +466,83 @@ par(mfrow=c(1,2))
 qqnorm(residuals(modelo_base_final), main="QQ Resid: Base", pch=20); qqline(residuals(modelo_base_final), col="red", lwd=2)
 qqnorm(residuals(modelo_bc_final),   main="QQ Resid: BoxCox", pch=20); qqline(residuals(modelo_bc_final), col="red", lwd=2)
 par(mfrow=c(1,1))
+
+
+
+
+# --- Modelo Base ---
+res_base <- residuals(modelo_base_final)
+fit_base <- fitted(modelo_base_final)
+sd_base  <- sd(res_base)
+
+# --- Modelo Box-Cox ---
+res_bc   <- residuals(modelo_bc_final)
+fit_bc   <- fitted(modelo_bc_final)
+sd_bc    <- sd(res_bc)
+
+col_main <- "#1F4E79" 
+col_ref  <- "#FF0000"  
+col_fill <- "#AED6F1"  
+col_smooth <- "#A5C9EB" 
+
+par(mfrow = c(2, 4), oma = c(2, 4, 4, 1), mar = c(4, 3, 2, 1))
+# ==============================================================================
+# FILA 1: MODELO BASE (Sin transformar)
+# ==============================================================================
+
+# 1.1 Distribución
+hist(res_base, freq = FALSE, main = "Distribución",
+     col = col_fill, border = "white",
+     xlab = "", ylab = "", las = 1, cex.main = 1)
+lines(density(res_base), col = col_main, lwd = 2)
+curve(dnorm(x, mean = mean(res_base), sd = sd_base), add = TRUE, col = col_ref, lty = 2)
+# Etiqueta Lateral Izquierda
+mtext("Modelo BASE", side = 2, line = 2.5, cex = 0.9, font = 2, col = col_main, las=0)
+
+# 1.2 Normalidad Q-Q
+qqnorm(res_base, main = "Normalidad Q-Q", col = col_main, pch = 16, cex = 0.8, xlab = "", ylab = "")
+qqline(res_base, col = col_ref, lwd = 1.5)
+
+# 1.3 Homocedasticidad
+plot(fit_base, res_base, main = "Homocedasticidad", col = col_main, pch = 16, cex = 0.6, xlab = "", ylab = "", las = 1)
+abline(h = 0, col = col_ref, lwd = 1.5, lty = 2)
+lines(lowess(fit_base, res_base), col = col_smooth, lwd = 2)
+
+# 1.4 Temporal
+plot(res_base, type = "l", main = "Estabilidad Temporal", col = col_main, lwd = 1, xlab = "", ylab = "", las = 1)
+abline(h = 0, col = col_ref)
+abline(h = c(2*sd_base, -2*sd_base), col = "#C0392B", lty = 2)
+
+# ==============================================================================
+# FILA 2: MODELO BOX-COX (Optimizado)
+# ==============================================================================
+
+# 2.1 Distribución
+hist(res_bc, freq = FALSE, main = "",
+     col = col_fill, border = "white",
+     xlab = "Residuos", ylab = "Densidad", las = 1)
+lines(density(res_bc), col = col_main, lwd = 2)
+curve(dnorm(x, mean = mean(res_bc), sd = sd_bc), add = TRUE, col = col_ref, lty = 2)
+
+mtext("Modelo BOX-COX", side = 2, line = 2.5, cex = 0.9, font = 2, col = col_main, las=0)
+# 2.2 Normalidad Q-Q
+qqnorm(res_bc, main = "", col = col_main, pch = 16, cex = 0.8, xlab = "Teóricos", ylab = "")
+qqline(res_bc, col = col_ref, lwd = 1.5)
+# 2.3 Homocedasticidad
+plot(fit_bc, res_bc, main = "", col = col_main, pch = 16, cex = 0.6, xlab = "Predichos", ylab = "", las = 1)
+abline(h = 0, col = col_ref, lwd = 1.5, lty = 2)
+lines(lowess(fit_bc, res_bc), col = col_smooth, lwd = 2)
+# 2.4 Temporal
+plot(res_bc, type = "l", main = "", col = col_main, lwd = 1, xlab = "Tiempo", ylab = "", las = 1)
+abline(h = 0, col = col_ref)
+abline(h = c(2*sd_bc, -2*sd_bc), col = "#C0392B", lty = 2)
+mtext("Comparativa de Diagnósticos: Antes vs Después", 
+      outer = TRUE, side = 3, line = 1, cex = 1.4, font = 2, col = col_main)
+par(mfrow = c(1, 1), oma = c(0, 0, 0, 0))
+
+
+
+print(paste("Lambda Lag:", round(pars_lag$lambda, 3)))
+print(paste("Lambda Precip Mean:", round(pars_precip_mean$lambda, 3)))
+print(paste("Lambda Dir Viento Mean:", round(pars_dir_mean$lambda, 3)))
 

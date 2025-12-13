@@ -6,6 +6,7 @@ library(corrplot)
 library(MASS)    
 library(Metrics) 
 library(car)
+library(lmtest)
 
 data_met <- read_csv("datos_completos_estacion_punteras.csv") 
 names(data_met)
@@ -36,18 +37,18 @@ train_data$temp_pca <- pca_temp$x[, 1]
 train_data <- train_data %>% dplyr::select(-temperatura_mean, -temperatura_max, -temperatura_min)
 pca_temp$rotation
 
-######################################
-## PCA para variables de vel viento ##
-######################################
+###################################
+## PCA para variables de humedad ##
+###################################
 hume <- train_data %>% dplyr::select(humedad_mean, humedad_max, humedad_min)
 pca_humi <- prcomp(hume, scale. = TRUE)
 train_data$humidity_pca <- pca_humi$x[, 1]
 train_data <- train_data %>% dplyr::select(-humedad_mean, -humedad_max, -humedad_min)
 pca_humi$rotation
 
-####################################
+######################################
 ## PCA para variables de vel viento ##
-####################################
+######################################
 vel_viento <- train_data %>% dplyr::select(velocidad_viento_mean, velocidad_viento_max, velocidad_viento_min)
 pca_vel_viento <- prcomp(vel_viento, scale. = TRUE)
 train_data$vel_viento_pca <- pca_vel_viento$x[, 1]
@@ -68,20 +69,29 @@ summary(modelo_inicial)
 summary(modelo_backward) # lm(formula = MP2_5 ~ temp_pca + direccion_viento_mean + direccion_viento_max + precipitacion_max, data = train_data)
 
 ## QQ plot para residuos del modelo_backward
-plot(modelo_backward)
+par(mfrow = c(2, 2), oma = c(0, 0, 3, 0), mar = c(4, 4, 2, 1))
+plot(modelo_backward, 
+     col = "#1F4E79",         
+     col.smooth = "#FF0000",   
+     col.qqline = "#FF0000",   
+     pch = 16,                
+     cex = 0.5,  
+     sub.caption = NA,
+     lwd = 1,                  
+     caption = c("Residuos vs Ajustados", 
+                 "Normal Q-Q", 
+                 "Escala-Ubicación", 
+                 "Residuos vs Apalancamiento"))
+mtext("Diagnóstico de Residuos: Modelo Backward", 
+      outer = TRUE, cex = 1, line = 1, font = 2, col = "#1F4E79")
+par(mfrow = c(1, 1), oma = c(0, 0, 0, 0))
 
+#Test del modelo inicla
+shapiro.test(residuals(modelo_backward))
+bptest(modelo_backward)
 
 ## modelo_backward tiene un muy buen R2 ajustado y todos los predictores son significativos, pero 
 ## los residuos no son normales (ver QQ-Plot más abajo). Por lo tanto, intentaremos una transformación Box-Cox.
-
-##############################
-### Transformación Box-Cox ### 
-##############################
-
-# trasforamcion a predictores 
-
-
-# transformacion a MP2_5
 
 #######################################################
 ##       MODELO 2: Transformación Box-Cox en Y       ##
