@@ -3,7 +3,13 @@
 #  (PCA + LAG + BOX-COX + COMPARACIÓN DE MODELOS)
 # ==============================================================================
 
+"""
+EXTRA:
+ver tema con los datos faltantes, no debemos omitir estos datos?
+"""
 # 1. Librerías
+library(lmtest)
+library(tseries)
 library(readr)
 library(rio)
 library(dplyr)
@@ -34,10 +40,18 @@ data_met <- na.omit(data_met)
 
 set.seed(123)
 
-# Separación Train (80%) / Test (20%)
-train_indices <- sample(1:nrow(data_met), size = 0.8 * nrow(data_met))
-train_data <- data_met[train_indices, ]
-test_data  <- data_met[-train_indices, ]
+# TEST = 10% más reciente
+n <- nrow(data_met)
+n_test <- ceiling(0.10 * n)
+
+test_data <- tail(data_met, n_test)
+data_90   <- head(data_met, n - n_test)
+
+# del 90%: 80% train y 20% validación (tambin temporal)
+n_val <- ceiling(0.20 * nrow(data_90))
+val_data   <- tail(data_90, n_val)
+train_data <- head(data_90, nrow(data_90) - n_val)
+
 
 
 # ------------------------------------------------------------------------------
@@ -97,31 +111,44 @@ print(lb_test)
 # ------------------------------------------------------------------------------
 print(">>> APLICANDO TRANSFORMACIONES...")
 
-# Función auxiliar para manejar ceros
-calc_boxcox_var <- function(variable) {
-  shift <- if(min(variable, na.rm = TRUE) <= 0) abs(min(variable, na.rm = TRUE)) + 0.001 else 0
-  pt <- powerTransform(variable + shift)
-  return(bcPower(variable + shift, pt$lambda))
+fit_bc_params <- function(x_train, eps = 0.001) {
+  mn <- min(x_train, na.rm = TRUE)
+  shift <- if (mn <= 0) abs(mn) + eps else eps   # aseguramos positividad
+  pt <- car::powerTransform(x_train + shift)
+  list(lambda = as.numeric(pt$lambda), shift = shift, eps = eps)
 }
 
-# A) Transformar Predictores
-train_data$precip_mean_bc <- calc_boxcox_var(train_data$precipitacion_mean)
-train_data$precip_max_bc  <- calc_boxcox_var(train_data$precipitacion_max)
-train_data$dir_mean_bc    <- calc_boxcox_var(train_data$direccion_viento_mean)
-train_data$dir_max_bc     <- calc_boxcox_var(train_data$direccion_viento_max)
-train_data$dir_min_bc     <- calc_boxcox_var(train_data$direccion_viento_min)
-train_data$lag_bc         <- calc_boxcox_var(train_data$MP2_5_anterior)
+apply_bc <- function(x, pars) {
+  x_pos <- pmax(x + pars$shift, pars$eps)        # forzar >0 siempre
+  car::bcPower(x_pos, pars$lambda)
+}
 
-# B) Transformar Variable Respuesta (Y)
-# Calculamos lambda óptimo para MP2.5
-offset_y <- if(min(train_data$MP2_5) <= 0) abs(min(train_data$MP2_5)) + 0.001 else 0
-bc_obj <- powerTransform(train_data$MP2_5 + offset_y)
-lambda_opt <- bc_obj$lambda
+# Aprender parámetros (lambda/shift) en TRAIN
+pars_precip_mean <- fit_bc_params(train_data$precipitacion_mean)
+pars_precip_max  <- fit_bc_params(train_data$precipitacion_max)
+pars_dir_mean    <- fit_bc_params(train_data$direccion_viento_mean)
+pars_dir_max     <- fit_bc_params(train_data$direccion_viento_max)
+pars_dir_min     <- fit_bc_params(train_data$direccion_viento_min)
+pars_lag         <- fit_bc_params(train_data$MP2_5_anterior)
+
+# A) Transformar predictores en TRAIN usando esos parámetros
+train_data$precip_mean_bc <- apply_bc(train_data$precipitacion_mean,    pars_precip_mean)
+train_data$precip_max_bc  <- apply_bc(train_data$precipitacion_max,     pars_precip_max)
+train_data$dir_mean_bc    <- apply_bc(train_data$direccion_viento_mean, pars_dir_mean)
+train_data$dir_max_bc     <- apply_bc(train_data$direccion_viento_max,  pars_dir_max)
+train_data$dir_min_bc     <- apply_bc(train_data$direccion_viento_min,  pars_dir_min)
+train_data$lag_bc         <- apply_bc(train_data$MP2_5_anterior,        pars_lag)
+
+
+# 5.1) Box-Cox para Y (respuesta): lambda óptimo SOLO en train
+
+offset_y <- if (min(train_data$MP2_5, na.rm = TRUE) <= 0) abs(min(train_data$MP2_5, na.rm = TRUE)) + 0.001 else 0
+bc_obj <- car::powerTransform(train_data$MP2_5 + offset_y)
+lambda_opt <- as.numeric(bc_obj$lambda)
 
 print(paste("Lambda óptimo para MP2.5:", round(lambda_opt, 3)))
 
-# Crear variable transformada
-train_data$MP2_5_bc <- bcPower(train_data$MP2_5 + offset_y, lambda_opt)
+train_data$MP2_5_bc <- car::bcPower(train_data$MP2_5 + offset_y, lambda_opt)
 
 
 # ------------------------------------------------------------------------------
@@ -162,3 +189,229 @@ par(mfrow = c(2, 2), oma = c(0, 0, 2, 0))
 plot(modelo_bc_final)
 mtext("Diagnóstico Completo: Modelo Final Box-Cox", outer = TRUE, cex = 1.2, font = 2)
 par(mfrow = c(1, 1))
+
+# ------------------------------------------------------------------------------
+# 8. PREPARAR VAL Y TEST PARA PREDECIR (PCA + BOX-COX)
+# ------------------------------------------------------------------------------
+
+# 8.0) Funciones auxiliares (definir una sola vez)
+inv_boxcox <- function(z, lambda, offset = 0) {
+  lambda <- as.numeric(lambda)
+  if (abs(lambda) < 1e-8) return(exp(z) - offset)
+  inner <- lambda * z + 1
+  inner[inner < 1e-8] <- 1e-8
+  (inner)^(1/lambda) - offset
+}
+
+calc_metrics <- function(y, yhat) {
+  denom <- pmax(abs(y), 1e-8)  # evitar división por 0
+  data.frame(
+    RMSE = Metrics::rmse(y, yhat),
+    MAE  = Metrics::mae(y, yhat),
+    MAPE = 100 * mean(abs((y - yhat) / denom), na.rm = TRUE),
+    R    = cor(y, yhat, use = "complete.obs"),
+    R2   = 1 - sum((y - yhat)^2, na.rm = TRUE) /
+      sum((y - mean(y, na.rm = TRUE))^2, na.rm = TRUE)
+  )
+}
+
+# ------------------------------------------------------------------------------
+# 8.VAL) PREPARAR val_data PARA PREDECIR (PCA + BOX-COX coherente)
+# ------------------------------------------------------------------------------
+
+temps_val <- val_data %>% dplyr::select(temperatura_mean, temperatura_max, temperatura_min)
+hume_val  <- val_data %>% dplyr::select(humedad_mean, humedad_max, humedad_min)
+vv_val    <- val_data %>% dplyr::select(velocidad_viento_mean, velocidad_viento_max, velocidad_viento_min)
+
+val_data$temp_pca       <- predict(pca_temp,       newdata = temps_val)[, 1]
+val_data$humidity_pca   <- predict(pca_humi,       newdata = hume_val)[, 1]
+val_data$vel_viento_pca <- predict(pca_vel_viento, newdata = vv_val)[, 1]
+
+val_data <- val_data %>%
+  dplyr::select(-temperatura_mean, -temperatura_max, -temperatura_min,
+                -humedad_mean, -humedad_max, -humedad_min,
+                -velocidad_viento_mean, -velocidad_viento_max, -velocidad_viento_min)
+
+val_data$precip_mean_bc <- apply_bc(val_data$precipitacion_mean,    pars_precip_mean)
+val_data$precip_max_bc  <- apply_bc(val_data$precipitacion_max,     pars_precip_max)
+val_data$dir_mean_bc    <- apply_bc(val_data$direccion_viento_mean, pars_dir_mean)
+val_data$dir_max_bc     <- apply_bc(val_data$direccion_viento_max,  pars_dir_max)
+val_data$dir_min_bc     <- apply_bc(val_data$direccion_viento_min,  pars_dir_min)
+val_data$lag_bc         <- apply_bc(val_data$MP2_5_anterior,        pars_lag)
+
+# ------------------------------------------------------------------------------
+# 8.TEST) PREPARAR test_data PARA PREDECIR (PCA + BOX-COX coherente)
+# ------------------------------------------------------------------------------
+
+temps_test <- test_data %>% dplyr::select(temperatura_mean, temperatura_max, temperatura_min)
+hume_test  <- test_data %>% dplyr::select(humedad_mean, humedad_max, humedad_min)
+vv_test    <- test_data %>% dplyr::select(velocidad_viento_mean, velocidad_viento_max, velocidad_viento_min)
+
+test_data$temp_pca       <- predict(pca_temp,       newdata = temps_test)[, 1]
+test_data$humidity_pca   <- predict(pca_humi,       newdata = hume_test)[, 1]
+test_data$vel_viento_pca <- predict(pca_vel_viento, newdata = vv_test)[, 1]
+
+test_data <- test_data %>%
+  dplyr::select(-temperatura_mean, -temperatura_max, -temperatura_min,
+                -humedad_mean, -humedad_max, -humedad_min,
+                -velocidad_viento_mean, -velocidad_viento_max, -velocidad_viento_min)
+
+test_data$precip_mean_bc <- apply_bc(test_data$precipitacion_mean,    pars_precip_mean)
+test_data$precip_max_bc  <- apply_bc(test_data$precipitacion_max,     pars_precip_max)
+test_data$dir_mean_bc    <- apply_bc(test_data$direccion_viento_mean, pars_dir_mean)
+test_data$dir_max_bc     <- apply_bc(test_data$direccion_viento_max,  pars_dir_max)
+test_data$dir_min_bc     <- apply_bc(test_data$direccion_viento_min,  pars_dir_min)
+test_data$lag_bc         <- apply_bc(test_data$MP2_5_anterior,        pars_lag)
+
+# ---------------- VALIDACIÓN (comparar modelos) ----------------
+pred_base_val   <- predict(modelo_base_final, newdata = val_data)
+
+pred_bc_val_tr  <- predict(modelo_bc_final, newdata = val_data)
+pred_bc_val     <- inv_boxcox(pred_bc_val_tr, lambda_opt, offset_y)
+
+metricas_val <- rbind(
+  cbind(Modelo = "Base",   calc_metrics(val_data$MP2_5, pred_base_val)),
+  cbind(Modelo = "BoxCox", calc_metrics(val_data$MP2_5, pred_bc_val))
+)
+
+# ------------------------------------------------------------------------------
+# 9. PREDICCIONES EN TEST + METRICAS (RMSE, MAE, MAPE, R, R2)
+# ------------------------------------------------------------------------------
+
+# Modelo 1 (Base) en test
+pred_base_test <- predict(modelo_base_final, newdata = test_data)
+
+# Modelo 2 (Box-Cox) en test (predice en escala transformada y se invierte)
+pred_bc_test_tr <- predict(modelo_bc_final, newdata = test_data)
+pred_bc_test    <- inv_boxcox(pred_bc_test_tr, lambda_opt, offset_y)
+
+# Métricas en test
+metricas_test <- rbind(
+  cbind(Modelo = "Base",   calc_metrics(test_data$MP2_5, pred_base_test)),
+  cbind(Modelo = "BoxCox", calc_metrics(test_data$MP2_5, pred_bc_test))
+)
+
+print("METRICAS EN TEST (X_test)")
+print(metricas_test)
+
+print("METRICAS EN VALIDACION (X_val)")
+print(metricas_val)
+
+# Gráfico Obs vs Pred en Test
+par(mfrow = c(1, 2))
+plot(test_data$MP2_5, pred_base_test, pch = 20,
+     main = "Test: Obs vs Pred (Base)", xlab = "Obs", ylab = "Pred")
+abline(0, 1, col = "red", lwd = 2)
+
+plot(test_data$MP2_5, pred_bc_test, pch = 20,
+     main = "Test: Obs vs Pred (BoxCox)", xlab = "Obs", ylab = "Pred")
+abline(0, 1, col = "red", lwd = 2)
+par(mfrow = c(1, 1))
+
+# ------------------------------------------------------------------------------
+# 10. TODOS LOS TEST DIAGNÓSTICOS 
+# ------------------------------------------------------------------------------
+run_all_tests <- function(model, nombre = "modelo", ljung_lags = c(10, 20)) {
+  res <- residuals(model)
+  n <- length(res)
+  p <- length(coef(model))
+  
+  cat("TESTS DIAGNÓSTICOS:", nombre, "\n")
+
+  
+  # Normalidad 
+  res_sw <- if (n > 5000) sample(res, 5000) else res
+  sw <- shapiro.test(res_sw)
+  jb <- tseries::jarque.bera.test(res)
+  cat("\n[Normalidad]\n")
+  cat("Shapiro-Wilk:  W =", round(unname(sw$statistic), 4),
+      " p =", signif(sw$p.value, 4), "\n")
+  cat("Jarque-Bera :  JB=", round(unname(jb$statistic), 4),
+      " p =", signif(jb$p.value, 4), "\n")
+  
+  # Heterocedasticidad
+  bp <- lmtest::bptest(model)
+  white <- lmtest::bptest(model, ~ fitted(model) + I(fitted(model)^2))
+  cat("Heterocedasticidad \n")
+  cat("Breusch-Pagan:  BP=", round(unname(bp$statistic), 4),
+      " p =", signif(bp$p.value, 4), "\n")
+  cat("White (aprox):  W =", round(unname(white$statistic), 4),
+      " p =", signif(white$p.value, 4), "\n")
+  
+  # Autocorrelación 
+  dw <- lmtest::dwtest(model)
+  bg <- lmtest::bgtest(model, order = 1)
+  cat("Autocorrelación \n")
+  cat("Durbin-Watson:  DW=", round(unname(dw$statistic), 4),
+      " p =", signif(dw$p.value, 4), "\n")
+  cat("Breusch-Godfrey (AR1): BG=", round(unname(bg$statistic), 4),
+      " p =", signif(bg$p.value, 4), "\n")
+  for (L in ljung_lags) {
+    lb <- Box.test(res, lag = L, type = "Ljung-Box")
+    cat("Ljung-Box lag", L, ": Q=", round(unname(lb$statistic), 4),
+        " p =", signif(lb$p.value, 4), "\n")
+  }
+  
+  # Especificación 
+  rs <- lmtest::resettest(model, power = 2:3, type = "fitted")
+  cat(" Especificación \n")
+  cat("RESET: F=", round(unname(rs$statistic), 4),
+      " p =", signif(rs$p.value, 4), "\n")
+  
+  # Multicolinealidad 
+  cat("Multicolinealidad \n")
+  print(car::vif(model))
+  
+  # Outliers / Influencia
+  cat("Outliers / Influencia \n")
+  ot <- tryCatch(car::outlierTest(model), error = function(e) NULL)
+  if (!is.null(ot)) print(ot) else cat("outlierTest: no disponible.\n")
+  
+  stud <- rstudent(model)
+  hat  <- hatvalues(model)
+  cook <- cooks.distance(model)
+  dff  <- dffits(model)
+  dfb  <- dfbetas(model)
+  
+  thr_stud <- 3
+  thr_hat  <- 2*p/n
+  thr_cook <- 4/n
+  thr_dff  <- 2*sqrt(p/n)
+  thr_dfb  <- 2/sqrt(n)
+  
+  cat("\nConteos (reglas típicas):\n")
+  cat("  |rstudent| >", thr_stud, ":", sum(abs(stud) > thr_stud, na.rm=TRUE), "\n")
+  cat("  leverage  >", round(thr_hat,4), ":", sum(hat > thr_hat, na.rm=TRUE), "\n")
+  cat("  Cook's D  >", round(thr_cook,4), ":", sum(cook > thr_cook, na.rm=TRUE), "\n")
+  cat("  |DFFITS|  >", round(thr_dff,4), ":", sum(abs(dff) > thr_dff, na.rm=TRUE), "\n")
+  cat("  max|DFBETA|>", round(thr_dfb,4), ":", 
+      sum(apply(abs(dfb), 1, max, na.rm=TRUE) > thr_dfb, na.rm=TRUE), "\n")
+  
+  top_idx <- order(cook, decreasing = TRUE)[1:min(10, n)]
+  top_tbl <- data.frame(
+    idx = top_idx,
+    cooks = cook[top_idx],
+    leverage = hat[top_idx],
+    rstudent = stud[top_idx],
+    dffits = dff[top_idx]
+  )
+  cat("\nTop 10 observaciones por Cook:\n")
+  print(top_tbl)
+  
+  invisible(list(
+    shapiro = sw, jarque_bera = jb, bp = bp, white = white,
+    dw = dw, bg = bg, reset = rs,
+    vif = car::vif(model), top_cook = top_tbl
+  ))
+}
+
+# Ejecutar tests para ambos modelos finales
+diag_base <- run_all_tests(modelo_base_final, "MODELO BASE")
+diag_bc   <- run_all_tests(modelo_bc_final,   "MODELO BOX-COX")
+
+# QQ-plot comparativo de residuos finales
+par(mfrow=c(1,2))
+qqnorm(residuals(modelo_base_final), main="QQ Resid: Base", pch=20); qqline(residuals(modelo_base_final), col="red", lwd=2)
+qqnorm(residuals(modelo_bc_final),   main="QQ Resid: BoxCox", pch=20); qqline(residuals(modelo_bc_final), col="red", lwd=2)
+par(mfrow=c(1,1))
+
